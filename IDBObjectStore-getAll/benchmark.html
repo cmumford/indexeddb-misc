@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Indexed DB IDBObjectStore.getAll Performance Benchmark</title>
+    <style>
+      body {
+        font-family: Helvetica, Arial, sans-serif;
+      }
+      #btn-run {
+        disabled: true;
+      }
+      td, .num-key-hdr {
+        text-align: right;
+      }
+      table {
+        border-collapse: collapse;
+      }
+      table, th, td {
+        border: 1px solid black;
+      }
+      th, td {
+        padding: 4px;
+      }
+    </style>
+    <script>
+      var valueCounts = [1, 10, 20, 100, 500, 1000, 10000];
+      var valueSizes = [1, 5, 10, 50, 100, 500, 1000, 10000];
+      var currentTestValIdx = -1;
+      var currentTestSizeIdx = -1;
+      var db_connection;
+      var current_test_vals = [];
+      var test_type = 'get';
+
+      function setStatus(message) {
+        document.getElementById("status").innerHTML = message;
+      }
+
+      function setBtnEnabled(enabled) {
+        document.getElementById("btn-run").disabled = !enabled;
+      }
+
+      function makeString(numChars)
+      {
+        var text = "";
+        var possible = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+
+        for( var i=0; i < numChars; i++ )
+          text += possible.charAt(Math.floor(Math.random() * possible.length));
+
+        return text;
+      }
+
+      function populateDatabase(connection) {
+        var start = new Date().getTime();
+        var transaction = connection.transaction(['Benchmark Store'], 'readwrite');
+
+        var store = transaction.objectStore('Benchmark Store');
+        var alphabet = "abcdefghijklmnopqrstuvwxyz".split("");
+
+        var maxNumValues = valueCounts[valueCounts.length-1];
+        for (var si = 0; si < valueSizes.length; si++) {
+          for (var valIdx = 0; valIdx < maxNumValues; valIdx++) {
+            var key = valueSizes[si] + ((valIdx+1) / maxNumValues);
+            store.add({str: makeString(valueSizes[si])}, key);
+          }
+        }
+
+        transaction.oncomplete = function() {
+          var end = new Date().getTime();
+          var duration = end - start;
+          setBtnEnabled(true);
+          db_connection = connection;
+          setStatus("Initialization complete (duration: " + duration + " msec).");
+        }
+        transaction.abort = function() {
+          setStatus("Initialization aborted.");
+        }
+      }
+
+      function createDatabase() {
+        setStatus("Creating database...");
+        var dbname = location.pathname + ' - benchmark';
+        var deleteRequest = indexedDB.deleteDatabase(dbname);
+        deleteRequest.onsuccess = function(evt) {
+          var openRequest = indexedDB.open(dbname);
+          openRequest.onupgradeneeded = function(evt) {
+            var connection = evt.target.result;
+            setStatus("Creating object store...");
+            var store = connection.createObjectStore('Benchmark Store', null);
+          };
+          openRequest.onsuccess = function(evt) {
+            populateDatabase(evt.target.result);
+          };
+        };
+      }
+
+      function createRows() {
+        var tbodies = document.getElementsByTagName("tbody");
+        var addRow = function(tbody, numKeys) {
+          var tr = document.createElement("tr");
+          var td = document.createElement("th");
+          td.innerHTML = numKeys.toString();
+          td.className = "num-key-hdr";
+          tr.appendChild(td);
+
+          for (var i = 0; i < valueSizes.length; i++) {
+            td = document.createElement("td");
+            td.id = "time_" + numKeys + "_" + valueSizes[i];
+            tr.appendChild(td);
+          }
+          tbody.appendChild(tr);
+        }
+        for (var i = 0; i < valueCounts.length; i++) {
+          addRow(tbodies[0], valueCounts[i]);
+        }
+      }
+
+      function createColumns() {
+        var tr = document.getElementsByTagName("tr")[0];
+        for (var i = 0; i < valueSizes.length; i++) {
+          var th = document.createElement("th");
+          th.innerHTML = valueSizes[i].toString();
+          tr.appendChild(th);
+        }
+      }
+
+      function benchmarkStarted() {
+        setBtnEnabled(false);
+        setStatus("Running...");
+      }
+
+      function benchmarkStopped() {
+        setBtnEnabled(true);
+        setStatus("");
+        currentTestValIdx = -1;
+        currentTestSizeIdx = -1;
+      }
+
+      function runCurrentBenchmark() {
+        var start = new Date().getTime();
+        var transaction = db_connection.transaction(['Benchmark Store'], 'readonly');
+        var store = transaction.objectStore('Benchmark Store');
+
+        var currentSize = valueSizes[currentTestSizeIdx];
+        var numVals = valueCounts[currentTestValIdx];
+        var request;
+        if (test_type == 'get') {
+          for (var v = 0; v < numVals; v++) {
+            var key = currentSize + (v+1) / numVals;
+            request = store.get(key);
+            request.onsuccess = function(evt) {
+              var data = evt.target.result;
+            }
+          }
+        } else {
+          request = store.getAll(undefined, numVals);
+          request.onsuccess = function(evt) {
+            var data = evt.target.result;
+          }
+        }
+
+        transaction.abort = function(evt) {
+          setStatus("Get transaction aborted.");
+        }
+
+        transaction.oncomplete = function(evt) {
+          var end = new Date().getTime();
+          var duration = end - start;
+
+          var id = "time_" + numVals + "_" + currentSize;
+          var td = document.getElementById(id);
+          td.innerHTML = duration.toString();
+
+          if (currentTestSizeIdx == (valueSizes.length-1) &&
+              currentTestValIdx == (valueCounts.length-1)) {
+              benchmarkStopped();
+              return;
+          }
+          currentTestValIdx += 1;
+          if (currentTestValIdx >= valueCounts.length) {
+            currentTestValIdx = 0;
+            currentTestSizeIdx += 1;
+          }
+          window.setTimeout(runCurrentBenchmark, 0);
+        }
+      }
+
+      function runBenchmark() {
+        benchmarkStarted();
+        currentTestValIdx = 0;
+        currentTestSizeIdx = 0;
+        runCurrentBenchmark();
+      }
+
+      function init() {
+        setStatus("Initializing...");
+        setBtnEnabled(false);
+        createColumns();
+        createRows();
+        createDatabase();
+      }
+    </script>
+  </head>
+  <body onload="init()">
+    <h1>Indexed DB IDBObjectStore.getAll Performance Benchmark</h1>
+    <table>
+      <thead>
+        <tr>
+          <th>Number of Values</th>
+        </tr>
+      </thead>
+      <tbody>
+      </tbody>
+    </table>
+    <button type="button" id="btn-run" onclick="runBenchmark()">Run Benchmark</button>
+    <p>Status: <span id="status">Loading...</span></p>
+  </body>
+</html>
