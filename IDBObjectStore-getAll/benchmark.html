@@ -5,6 +5,7 @@
     <style>
       body {
         font-family: Helvetica, Arial, sans-serif;
+        font-size: 14px;
       }
       #btn-run {
         disabled: true;
@@ -21,18 +22,30 @@
       th, td {
         padding: 4px;
       }
+      .error {
+        color: red;
+      }
+      .test-td {
+        text-align: center;
+      }
     </style>
     <script>
-      var valueCounts = [1, 10, 20, 100, 500, 1000, 10000];
-      var valueSizes = [1, 5, 10, 50, 100, 500, 1000, 10000];
-      var currentTestValIdx = -1;
-      var currentTestSizeIdx = -1;
+      var valueCounts = [1, 10, 20, 100, 500, 1000, 5000, 10000];
+      var maxValueCount = Math.max.apply(null, valueCounts);
+      var valueSizes = [1, 5, 10, 50, 100, 500, 1000, 5000];
+      var tests = ['get', 'cursor', 'getAll'];
+      var currentTestValIdx = -1; // Index into valueCounts
+      var currentTestSizeIdx = -1; // Index into valueSizes
+      var currentTestIdx = -1;  // Index into tests
       var db_connection;
-      var current_test_vals = [];
-      var test_type = 'get';
 
       function setStatus(message) {
+        console.log(message);
         document.getElementById("status").innerHTML = message;
+      }
+
+      function setErrorStatus(message) {
+        setStatus('<span class="error">' + message + '</span>')
       }
 
       function setBtnEnabled(enabled) {
@@ -50,17 +63,27 @@
         return text;
       }
 
+      // The key is a floating point number where:
+      //   IP: the size of the value.
+      //   FP: <leading zeros>(valIdx) .. <leading zeros>maxValueCount
+      // So for (100, 7, 49) we would have: 100.08
+      //    for (10, 99, 100) we would have: 10.099
+      function genKey(valSize, valIdx) {
+        var numDigits = maxValueCount.toString().length;
+        return valSize + valIdx / Math.pow(10, numDigits)
+      }
+
       function populateDatabase(connection) {
         var start = new Date().getTime();
+
         var transaction = connection.transaction(['Benchmark Store'], 'readwrite');
 
         var store = transaction.objectStore('Benchmark Store');
         var alphabet = "abcdefghijklmnopqrstuvwxyz".split("");
 
-        var maxNumValues = valueCounts[valueCounts.length-1];
         for (var si = 0; si < valueSizes.length; si++) {
-          for (var valIdx = 0; valIdx < maxNumValues; valIdx++) {
-            var key = valueSizes[si] + ((valIdx+1) / maxNumValues);
+          for (var valIdx = 0; valIdx < maxValueCount; valIdx++) {
+            var key = genKey(valueSizes[si], valIdx);
             store.add({str: makeString(valueSizes[si])}, key);
           }
         }
@@ -73,19 +96,18 @@
           setStatus("Initialization complete (duration: " + duration + " msec).");
         }
         transaction.abort = function() {
-          setStatus("Initialization aborted.");
+          setErrorStatus("Initialization aborted.");
         }
       }
 
       function createDatabase() {
-        setStatus("Creating database...");
+        setStatus("Initializing database...");
         var dbname = location.pathname + ' - benchmark';
         var deleteRequest = indexedDB.deleteDatabase(dbname);
         deleteRequest.onsuccess = function(evt) {
           var openRequest = indexedDB.open(dbname);
           openRequest.onupgradeneeded = function(evt) {
             var connection = evt.target.result;
-            setStatus("Creating object store...");
             var store = connection.createObjectStore('Benchmark Store', null);
           };
           openRequest.onsuccess = function(evt) {
@@ -94,24 +116,53 @@
         };
       }
 
+      function genTestId(testName, numVals, valSize) {
+        return "time_" + testName + "_" + numVals + "_" + valSize;
+      }
+
+      function addSizeHeader() {
+        var thead = document.getElementsByTagName("thead")[0];
+        var tr = document.createElement("tr");
+        var td = document.createElement("td");
+        tr.appendChild(td);
+        td = document.createElement("td");
+        td.colSpan = valueSizes.length;
+        td.innerHTML = "Value character count";
+        td.className = "test-td";
+        tr.appendChild(td);
+        thead.insertBefore(tr, thead.firstChild);
+      }
+
       function createRows() {
-        var tbodies = document.getElementsByTagName("tbody");
-        var addRow = function(tbody, numKeys) {
+        var tbody = document.getElementsByTagName("tbody")[0];
+        var addRow = function(tbody, testName, numVals) {
           var tr = document.createElement("tr");
           var td = document.createElement("th");
-          td.innerHTML = numKeys.toString();
+          td.innerHTML = numVals.toString();
           td.className = "num-key-hdr";
           tr.appendChild(td);
 
           for (var i = 0; i < valueSizes.length; i++) {
             td = document.createElement("td");
-            td.id = "time_" + numKeys + "_" + valueSizes[i];
+            td.id = genTestId(testName, numVals, valueSizes[i]);
             tr.appendChild(td);
           }
           tbody.appendChild(tr);
-        }
-        for (var i = 0; i < valueCounts.length; i++) {
-          addRow(tbodies[0], valueCounts[i]);
+        };
+        var addTestRow = function(tbody, testName) {
+          var tr = document.createElement("tr");
+          var td = document.createElement("td");
+          td.colSpan = 1 + valueSizes.length;
+          td.className = "test-td";
+          td.innerHTML = testName;
+          tr.appendChild(td);
+          tbody.appendChild(tr);
+        };
+        for (var idxTest = 0; idxTest < tests.length; idxTest += 1) {
+          addTestRow(tbody, tests[idxTest]);
+          for (var i = 0; i < valueCounts.length; i++) {
+            addRow(tbody, tests[idxTest], valueCounts[i]);
+          }
         }
       }
 
@@ -132,8 +183,28 @@
       function benchmarkStopped() {
         setBtnEnabled(true);
         setStatus("");
-        currentTestValIdx = -1;
-        currentTestSizeIdx = -1;
+        resetTestState();
+      }
+
+      function resetTestState() {
+        currentTestIdx = 0;
+        currentTestValIdx = 0;
+        currentTestSizeIdx = 0;
+      }
+
+      function advanceTestState() {
+        currentTestValIdx += 1;
+        if (currentTestValIdx >= valueCounts.length) {
+          currentTestValIdx = 0;
+          currentTestSizeIdx += 1;
+          if (currentTestSizeIdx >= valueSizes.length) {
+            currentTestSizeIdx = 0;
+            currentTestIdx += 1;
+            if (currentTestIdx == tests.length)
+              return false;
+          }
+        }
+        return true;
       }
 
       function runCurrentBenchmark() {
@@ -144,51 +215,61 @@
         var currentSize = valueSizes[currentTestSizeIdx];
         var numVals = valueCounts[currentTestValIdx];
         var request;
+        var count = 0;
+        var test_type = tests[currentTestIdx];
         if (test_type == 'get') {
           for (var v = 0; v < numVals; v++) {
             var key = currentSize + (v+1) / numVals;
             request = store.get(key);
             request.onsuccess = function(evt) {
               var data = evt.target.result;
+              count += 1;
             }
           }
-        } else {
+        } else if (test_type == 'getAll')  {
           request = store.getAll(undefined, numVals);
           request.onsuccess = function(evt) {
             var data = evt.target.result;
+            count += data.length;
           }
+        } else if (test_type == 'cursor')  {
+          var minKey = genKey(currentSize, 0);
+          var maxKey = genKey(currentSize, numVals-1);
+          var cursor = store.openCursor(IDBKeyRange.bound(minKey, maxKey));
+          cursor.onsuccess = function(evt) {
+            var c = evt.target.result;
+            if (c) {
+              count += 1;
+              c.continue();
+            }
+          }
+        } else {
+          setErrorStatus('Unknown test"' + test_type + '"');
+          benchmarkStopped();
         }
 
         transaction.abort = function(evt) {
-          setStatus("Get transaction aborted.");
+          setErrorStatus("Get transaction aborted.");
         }
 
         transaction.oncomplete = function(evt) {
           var end = new Date().getTime();
           var duration = end - start;
 
-          var id = "time_" + numVals + "_" + currentSize;
+          var id = genTestId(test_type, numVals, currentSize);
           var td = document.getElementById(id);
           td.innerHTML = duration.toString();
 
-          if (currentTestSizeIdx == (valueSizes.length-1) &&
-              currentTestValIdx == (valueCounts.length-1)) {
-              benchmarkStopped();
-              return;
-          }
-          currentTestValIdx += 1;
-          if (currentTestValIdx >= valueCounts.length) {
-            currentTestValIdx = 0;
-            currentTestSizeIdx += 1;
-          }
-          window.setTimeout(runCurrentBenchmark, 0);
+          if (advanceTestState())
+            window.setTimeout(runCurrentBenchmark, 0);
+          else
+            benchmarkStopped();
         }
       }
 
       function runBenchmark() {
         benchmarkStarted();
-        currentTestValIdx = 0;
-        currentTestSizeIdx = 0;
+        resetTestState();
         runCurrentBenchmark();
       }
 
@@ -197,6 +278,7 @@
         setBtnEnabled(false);
         createColumns();
         createRows();
+        addSizeHeader();
         createDatabase();
       }
     </script>
@@ -205,9 +287,7 @@
     <h1>Indexed DB IDBObjectStore.getAll Performance Benchmark</h1>
     <table>
       <thead>
-        <tr>
-          <th>Number of Values</th>
-        </tr>
+        <tr><th>Number of Values</th></tr>
       </thead>
       <tbody>
       </tbody>
