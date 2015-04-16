@@ -27,17 +27,36 @@
       }
       .test-td {
         text-align: center;
+        background-color: #EBF5FF;
+      }
+      #content {
+        display:table;
+      }
+      .table-row {
+        padding: table-row;;
+      }
+      #left {
+        display: table-cell;
+        padding: 6px;
+      }
+      #right {
+        display: table-cell;
+        padding: 6px;
       }
     </style>
     <script>
-      var valueCounts = [1, 10, 20, 100, 500, 1000, 5000, 10000];
+      var valueCounts = [1, 10, 50, 100, 250, 500, 1000, 3000, 5000];
       var maxValueCount = Math.max.apply(null, valueCounts);
-      var valueSizes = [1, 5, 10, 50, 100, 500, 1000, 5000];
+      var valueSizes = [1, 10, 20, 50, 100, 400, 1000];
       var tests = ['get', 'cursor', 'getAll'];
       var currentTestValIdx = -1; // Index into valueCounts
       var currentTestSizeIdx = -1; // Index into valueSizes
       var currentTestIdx = -1;  // Index into tests
       var db_connection;
+      var keyTypes = ['out-of-line', 'generated'];
+      var keyType = keyTypes[0];
+      var debug = false;
+      var benchmarkStartTime;
 
       function setStatus(message) {
         console.log(message);
@@ -69,8 +88,15 @@
       // So for (100, 7, 49) we would have: 100.08
       //    for (10, 99, 100) we would have: 10.099
       function genKey(valSize, valIdx) {
-        var numDigits = maxValueCount.toString().length;
-        return valSize + valIdx / Math.pow(10, numDigits)
+        if (keyType == 'out-of-line') {
+          var numDigits = maxValueCount.toString().length;
+          return valSize + valIdx / Math.pow(10, numDigits)
+        } else if (keyType == 'generated') {
+          var sizeIdx = valueSizes.indexOf(valSize);
+          return 1 + sizeIdx * maxValueCount + valIdx;
+        } else {
+          return undefined;
+        }
       }
 
       function populateDatabase(connection) {
@@ -82,9 +108,20 @@
         var alphabet = "abcdefghijklmnopqrstuvwxyz".split("");
 
         for (var si = 0; si < valueSizes.length; si++) {
+          var len = valueSizes[si];
           for (var valIdx = 0; valIdx < maxValueCount; valIdx++) {
-            var key = genKey(valueSizes[si], valIdx);
-            store.add({str: makeString(valueSizes[si])}, key);
+            var key = genKey(len, valIdx);
+            var value;
+            if (debug)
+              value = "idx:" + valIdx + ", len:" + len;
+            else
+              value = makeString(len);
+            if (keyType == 'out-of-line')
+              store.add({str: value}, key);
+            else if (keyType == 'generated')
+              store.add({str: value});
+            else
+              setErrorStatus('Unknown key type: ' + keyType);
           }
         }
 
@@ -108,7 +145,12 @@
           var openRequest = indexedDB.open(dbname);
           openRequest.onupgradeneeded = function(evt) {
             var connection = evt.target.result;
-            var store = connection.createObjectStore('Benchmark Store', null);
+            if (keyType == 'out-of-line')
+              connection.createObjectStore('Benchmark Store', null);
+            else if (keyType == 'generated')
+              connection.createObjectStore('Benchmark Store', {autoIncrement: true, keyPath: 'id'});
+            else
+              setErrorStatus('Unknown key type: ' + keyType);
           };
           openRequest.onsuccess = function(evt) {
             populateDatabase(evt.target.result);
@@ -124,6 +166,7 @@
         var thead = document.getElementsByTagName("thead")[0];
         var tr = document.createElement("tr");
         var td = document.createElement("td");
+        td.innerHTML = '&nbsp;';
         tr.appendChild(td);
         td = document.createElement("td");
         td.colSpan = valueSizes.length;
@@ -154,7 +197,7 @@
           var td = document.createElement("td");
           td.colSpan = 1 + valueSizes.length;
           td.className = "test-td";
-          td.innerHTML = testName;
+          td.innerHTML = testName + " (msec)";
           tr.appendChild(td);
           tbody.appendChild(tr);
         };
@@ -181,8 +224,10 @@
       }
 
       function benchmarkStopped() {
+        end = new Date().getTime();
+        duration = end - benchmarkStartTime;
         setBtnEnabled(true);
-        setStatus("");
+        setStatus("Benchmark runtime: " + (duration / 1000.0) + " (sec)");
         resetTestState();
       }
 
@@ -219,7 +264,7 @@
         var test_type = tests[currentTestIdx];
         if (test_type == 'get') {
           for (var v = 0; v < numVals; v++) {
-            var key = currentSize + (v+1) / numVals;
+            var key = genKey(numVals, v);
             request = store.get(key);
             request.onsuccess = function(evt) {
               var data = evt.target.result;
@@ -227,7 +272,14 @@
             }
           }
         } else if (test_type == 'getAll')  {
-          request = store.getAll(undefined, numVals);
+          if (currentTestValIdx == (valueCounts.length-1)) {
+            // Getting all values, so no need for key range
+            request = store.getAll(undefined, numVals);
+          } else {
+            var minKey = genKey(currentSize, 0);
+            var maxKey = genKey(currentSize, numVals-1);
+            request = store.getAll(IDBKeyRange.bound(minKey, maxKey));
+          }
           request.onsuccess = function(evt) {
             var data = evt.target.result;
             count += data.length;
@@ -261,13 +313,14 @@
           td.innerHTML = duration.toString();
 
           if (advanceTestState())
-            window.setTimeout(runCurrentBenchmark, 0);
+            window.setTimeout(runCurrentBenchmark, 20);
           else
             benchmarkStopped();
         }
       }
 
       function runBenchmark() {
+        benchmarkStartTime = new Date().getTime();
         benchmarkStarted();
         resetTestState();
         runCurrentBenchmark();
@@ -275,6 +328,7 @@
 
       function init() {
         setStatus("Initializing...");
+        document.getElementById("key-type").innerHTML = keyType;
         setBtnEnabled(false);
         createColumns();
         createRows();
@@ -285,14 +339,23 @@
   </head>
   <body onload="init()">
     <h1>Indexed DB IDBObjectStore.getAll Performance Benchmark</h1>
-    <table>
-      <thead>
-        <tr><th>Number of Values</th></tr>
-      </thead>
-      <tbody>
-      </tbody>
-    </table>
-    <button type="button" id="btn-run" onclick="runBenchmark()">Run Benchmark</button>
-    <p>Status: <span id="status">Loading...</span></p>
+    <div id="content">
+      <div class="table-row">
+        <div id="left">
+          <table>
+            <thead>
+              <tr><th>Number of Values</th></tr>
+            </thead>
+            <tbody>
+            </tbody>
+          </table>
+        </div>
+        <div id="right">
+          <p>Key type: <span id="key-type">?</span></p>
+          <button type="button" id="btn-run" onclick="runBenchmark()">Run Benchmark</button>
+          <p>Status: <span id="status">Loading...</span></p>
+        </div>
+      </div>
+    </div>
   </body>
 </html>
