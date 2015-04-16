@@ -5,7 +5,7 @@
     <style>
       body {
         font-family: Helvetica, Arial, sans-serif;
-        font-size: 14px;
+        font-size: 12px;
       }
       #btn-run {
         disabled: true;
@@ -28,6 +28,10 @@
       .test-td {
         text-align: center;
         background-color: #EBF5FF;
+      }
+      .test-td-unsupported {
+        text-align: center;
+        background-color: red;
       }
       #content {
         display:table;
@@ -57,6 +61,7 @@
       var keyType = keyTypes[0];
       var debug = false;
       var benchmarkStartTime;
+      var hasGetAll = false;
 
       function setStatus(message) {
         console.log(message);
@@ -106,6 +111,8 @@
 
         var store = transaction.objectStore('Benchmark Store');
         var alphabet = "abcdefghijklmnopqrstuvwxyz".split("");
+
+        hasGetAll = typeof store.getAll == 'function';
 
         for (var si = 0; si < valueSizes.length; si++) {
           var len = valueSizes[si];
@@ -192,19 +199,26 @@
           }
           tbody.appendChild(tr);
         };
-        var addTestRow = function(tbody, testName) {
+        var addTestRow = function(tbody, testName, className) {
           var tr = document.createElement("tr");
           var td = document.createElement("td");
           td.colSpan = 1 + valueSizes.length;
-          td.className = "test-td";
+          td.className = className;
           td.innerHTML = testName + " (msec)";
           tr.appendChild(td);
           tbody.appendChild(tr);
         };
         for (var idxTest = 0; idxTest < tests.length; idxTest += 1) {
-          addTestRow(tbody, tests[idxTest]);
-          for (var i = 0; i < valueCounts.length; i++) {
-            addRow(tbody, tests[idxTest], valueCounts[i]);
+          var className;
+          if (hasGetAll || tests[idxTest] != 'getAll')
+            className = 'test-td';
+          else
+            className = 'test-td-unsupported';
+          addTestRow(tbody, tests[idxTest], className);
+          if (hasGetAll || tests[idxTest] != 'getAll') {
+            for (var i = 0; i < valueCounts.length; i++) {
+              addRow(tbody, tests[idxTest], valueCounts[i]);
+            }
           }
         }
       }
@@ -271,7 +285,7 @@
               count += 1;
             }
           }
-        } else if (test_type == 'getAll')  {
+        } else if (test_type == 'getAll' && hasGetAll)  {
           if (currentTestValIdx == (valueCounts.length-1)) {
             // Getting all values, so no need for key range
             request = store.getAll(undefined, numVals);
