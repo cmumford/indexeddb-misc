@@ -113,6 +113,7 @@
         var alphabet = "abcdefghijklmnopqrstuvwxyz".split("");
 
         hasGetAll = typeof store.getAll == 'function';
+        createTable();
 
         for (var si = 0; si < valueSizes.length; si++) {
           var len = valueSizes[si];
@@ -340,13 +341,16 @@
         runCurrentBenchmark();
       }
 
+      function createTable() {
+        createColumns();
+        createRows();
+        addSizeHeader();
+      }
+
       function init() {
         setStatus("Initializing...");
         document.getElementById("key-type").innerHTML = keyType;
         setBtnEnabled(false);
-        createColumns();
-        createRows();
-        addSizeHeader();
         createDatabase();
       }
     </script>
