@@ -85,8 +85,8 @@
       // The key is a floating point number where:
       //   IP: the size of the value.
       //   FP: <leading zeros>(valIdx) .. <leading zeros>maxValueCount
-      // So for (100, 7, 49) we would have: 100.08
-      //    for (10, 99, 100) we would have: 10.099
+      // So for (100, 7) (with maxValueCount=49) we would have: 100.07
+      //    for (10, 99) (with maxValueCount=1000) we would have: 10.099
       function genKey(valSize, valIdx) {
         if (keyType == 'out-of-line') {
           var numDigits = maxValueCount.toString().length;
