@@ -1,0 +1,261 @@
+<!DOCTYPE HTML>
+<html>
+  <head>
+    <style>
+    table, th, td {
+      border: 1px solid black;
+    }
+    </style>
+    <script>
+    var dbName = 'idb-put-benchmark';
+    var storeName = 'Walmart';
+    var dbVersion = 1;
+    var val_nums = [1, 50, 250, 900, 4000, 25000, 50000];
+    var val_sizes = [1, 100, 500, 1000];
+    var values = {};
+    var db = null;
+    var running_test = false;
+    var curr_val_num_idx = 0;
+    var curr_val_size_idx = 0;
+    var curr_key_num;
+    var test_start_time;
+    var immediate_commit = false;
+
+    function createValues() {
+      for (var i = 0; i < val_sizes.length; ++i) {
+        values[i] = new Array(val_sizes[i]+1).join('X');
+      }
+    }
+
+    function $(id) {
+      return document.getElementById(id);
+    }
+
+    function toSize(bytes) {
+      var mb = 1024*1024;
+      if (bytes >= mb) {
+        return (bytes/mb).toFixed(1) + ' MB';
+      } else {
+        return (bytes/1024).toFixed(1) + ' KB';
+      }
+    }
+
+    function updateQuota() {
+      if (!navigator.webkitTemporaryStorage)
+        return;
+      navigator.webkitTemporaryStorage.queryUsageAndQuota (
+        function(usedBytes, grantedBytes) {
+          setElemText('used', toSize(usedBytes));
+          setElemText('granted', toSize(grantedBytes));
+        },
+        function(e) { console.log('Error', e);  }
+      );
+    }
+
+    function setStatus(msg) {
+      if (msg) {
+        console.log(msg);
+        setElemText('status', msg);
+      } else {
+        setElemText('status', '');
+      }
+    }
+
+    function setElemText(id, text) {
+      $(id).innerHTML = text;
+    }
+
+    function sensitizeButtons() {
+      $('run').disabled = !db || running_test;
+      $('close').disabled = !db;
+    }
+
+    function addChild(parent, tagName, innerHTML) {
+      var child = document.createElement(tagName);
+      if (innerHTML) {
+        child.innerHTML = innerHTML;
+      }
+      parent.appendChild(child);
+      return child;
+    }
+
+    function initTable() {
+      var thead = document.getElementsByTagName('thead')[0];
+      var i, j, tr;
+      tr = addChild(thead, 'tr');
+      th = addChild(tr, 'th');
+      th.innerHTML = '# Vals';
+      th = addChild(tr, 'th');
+      th.colSpan = val_sizes.length;
+      th.innerHTML = 'Val Size';
+
+      tr = addChild(thead, 'tr');
+      addChild(tr, 'th');
+      for (var i = 0; i < val_sizes.length; ++i) {
+        addChild(tr, 'th', val_sizes[i]);
+      }
+
+      var tbody = document.getElementsByTagName('tbody')[0];
+      for (i = 0; i < val_nums.length; ++i) {
+        tr = addChild(tbody, 'tr');
+        addChild(tr, 'td', val_nums[i]);
+        for (j = 0; j < val_sizes.length; ++j) {
+          var td = addChild(tr, 'td');
+          td.id = 'td_' + i + ',' + j;
+        }
+      }
+    }
+
+    function writeCellValues() {
+      var txn_start_time = new Date().getTime();
+      var tx;
+      if (immediate_commit)
+        tx = db.transaction(storeName, 'readwrite', {immediateCommit:immediate_commit});
+      else
+        tx = db.transaction(storeName, 'readwrite');
+      tx.onabort = function(evt) {
+        console.warn('The transaction aborted');
+        running_test = false;
+        updateUI();
+      }
+      var store = tx.objectStore(storeName);
+      var num_vals = val_nums[curr_val_num_idx];
+      var val_size = val_sizes[curr_val_size_idx];
+      var curr_val = values[curr_val_size_idx];
+      for (var i = 0; i < num_vals; ++i) {
+        store.put(curr_val, curr_key_num);
+        curr_key_num += 1;
+      }
+      tx.oncomplete = function() {
+        var now =new Date().getTime();
+        var duration = now - txn_start_time;
+        var id = 'td_' + curr_val_num_idx + ',' + curr_val_size_idx;
+        setElemText(id, duration);
+
+        curr_val_size_idx += 1;
+        if (curr_val_size_idx >= val_sizes.length) {
+          curr_val_size_idx = 0;
+          curr_val_num_idx += 1;
+          if (curr_val_num_idx >= val_nums.length) {
+            running_test = false;
+            setElemText('runtime', now - test_start_time);
+            setElemText('num_vals', curr_key_num - 1);
+            updateUI();
+            setStatus('Test is done');
+            return;
+          }
+        }
+        window.setTimeout(writeCellValues);
+      };
+    }
+
+    function runTest() {
+      immediate_commit = $('immediateCheckbox').checked;
+      test_start_time = new Date().getTime();
+      curr_key_num = 1;
+      curr_val_num_idx = 0;
+      curr_val_size_idx = 0;
+      running_test = true;
+      updateUI();
+      setStatus('Running performance test');
+      writeCellValues();
+    }
+
+    function updateUI() {
+      sensitizeButtons();
+    }
+
+    function openDatabase() {
+      var open_req = indexedDB.open(dbName, dbVersion);
+      open_req.onupgradeneeded = function(evt) {
+        setStatus('Upgrading db from old:' + evt.oldVersion + ' to new:' + evt.newVersion);
+        var connection = evt.target.result;
+        var store = connection.createObjectStore(storeName);
+        updateUI();
+      };
+      open_req.onerror = function(evt) {
+        setStatus(JSON.stringify(evt));
+        updateUI();
+      };
+      open_req.onblocked = function(evt) {
+        console.log("Database open blocked");
+      };
+      open_req.onsuccess = function(evt) {
+        db = evt.target.result;
+        db.onerror = function(evt) {
+          console.error(evt.target.error.message);
+        };
+        updateUI();
+        setStatus("Database is open");
+      };
+    }
+
+    function dbClosed(evt) {
+      clearTimeout(closeTimerID);
+      setStatus('database has been closed');
+      db = null;
+      updateUI();
+    }
+
+    function closeDatabase() {
+      if (!db) {
+        dbClosed();
+        return;
+      }
+      setStatus('Closing db...');
+      closeTimerID = window.setTimeout(function() {
+        // No way (currently) to get an event with the connection is closed.
+        // Chrome has an extension, but that's only called when force closed,
+        // like during corruption. Set a timeout to "consider" it closed after
+        // a reasonable period of time.
+        dbClosed({});
+      }, 500);
+      db.close();
+    }
+
+    function deleteDatabase() {
+      setStatus('Deleting db...');
+      var delete_req = indexedDB.deleteDatabase(dbName);
+      delete_req.onsuccess = function(evt) {
+        setStatus('Deleted "' + dbName + '", oldver=' + evt.oldVersion + ', newver=' + evt.newVersion);
+        db = null;
+        updateUI();
+      }
+      delete_req.onerror = function(evt) {
+        setStatus(evt.target.error);
+        updateUI();
+      }
+    }
+
+    function init() {
+      openDatabase();
+      createValues();
+      initTable();
+      sensitizeButtons();
+      setInterval(updateQuota, 1000);
+    }
+    </script>
+  </head>
+  <body onload="init()">
+    <h1>Indexed DB put perf test</h1>
+    <p>A test application for <a href="http://crbug.com/496327">crbug.com/496327</a></p>
+    <p>
+    Status: <span id="status"></span><br>
+    Values written: <span id="num_vals"></span><br>
+    Total runtime: <span id="runtime"></span><br>
+    Using <span id="used">?</span> out of <span id="granted">?</span><br>
+    </p>
+    <form>
+      <input id="immediateCheckbox" name="immediate" type="checkbox">Immediate<br>
+    </form>
+    <button id="run" onclick="runTest()" disabled>Run perf test</button><br>
+    <button id="close" onclick="closeDatabase()" disabled>Close Database</button><br>
+    <button id="delete" onclick="deleteDatabase()">Delete Database</button>
+    <table>
+      <thead>
+      </thead>
+      <tbody>
+      </tbody>
+    </table>
+  </body>
+</html>
