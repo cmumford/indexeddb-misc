@@ -1,0 +1,51 @@
+---
+title: "Indexed DB Write-Only (one-shot) Transactions"
+output:
+  html_document:
+    toc: true
+    theme: flatly
+    smart: true
+    self_contained: false
+---
+
+This is an experiment to evaluate the benefit of immediately committing a
+transaction once it's task queue is empty. Normally the browser process waits
+for all requests to be completed (i.e. onsuccess/onabort) to be called, and
+the Render process calls back to the browser to complete the transaction once
+all outstanding requests are completed.
+
+Performance metrics for https://crbug.com/496327.
+
+The current version which waits for request completion. Here are the times
+for repeated calls to IDBObjectStore.put with varying value sizes:
+
+```{r, echo=FALSE}
+library(pander)
+```
+
+This is how it functions today (stable)
+
+```{r}
+(standard = read.csv("idb-write-standard.csv", header=TRUE, row.names=1))
+```
+
+And with the experimental `{immediateCommit:true}` option when creating a transaction.
+
+```{r, echo=TRUE}
+(modified = read.csv("idb-write-modified.csv", header=TRUE, row.names=1))
+```
+
+So the performance improvements in the given experiments are:
+
+```{r}
+(speedup = standard / modified)
+```
+And plotting them:
+
+```{r, echo=TRUE}
+iterations <- colnames(speedup)
+markers <- 1:8
+colors <- c("darkgreen", "blue", "brown", "magenta")
+matplot(speedup, type="l", col=colors, bty="n", pch=markers, xlab="Iterations")
+legend("topleft", col=colors, iterations, bg="white", lwd=1, pch=markers)
+```
